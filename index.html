@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MERIDIAN // On-Device Console</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --abyss: #060B16;
+    --deck: #0B1322;
+    --panel: #101A2E;
+    --panel-2: #0D1626;
+    --ink: #E8EEF7;
+    --dim: #8FA0B8;
+    --faint: #5A6B84;
+    --line: #1E2C46;
+    --line-bright: #2C3E5E;
+    --signal: #FFB224;
+    --signal-soft: rgba(255, 178, 36, 0.12);
+    --pulse: #37E5A8;
+    --danger: #FF5D5D;
+    --user-edge: #4D7CFE;
+    --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(77, 124, 254, 0.10), transparent 60%),
+      radial-gradient(900px 480px at 8% 110%, rgba(255, 178, 36, 0.07), transparent 60%),
+      var(--abyss);
+    color: var(--ink);
+    display: flex;
+    min-height: 100vh;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      linear-gradient(rgba(143, 160, 184, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(143, 160, 184, 0.05) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, black 30%, transparent 100%);
+  }
+  /* ---------- rail ---------- */
+  .rail {
+    width: 232px; flex-shrink: 0;
+    background: linear-gradient(180deg, var(--deck), #080E1A);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    padding: 20px 14px 16px;
+    position: sticky; top: 0; height: 100vh;
+    z-index: 2;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 2px 6px 18px; }
+  .core {
+    width: 38px; height: 38px; flex-shrink: 0;
+    background: conic-gradient(from 210deg, var(--signal), #FF7A1A, var(--signal));
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .core::after {
+    content: "M"; font-weight: 800; font-size: 15px; color: #0A0F1C;
+    font-family: var(--mono);
+  }
+  .brand h1 { margin: 0; font-size: 15px; letter-spacing: 3px; font-family: var(--mono); font-weight: 700; }
+  .brand p { margin: 2px 0 0; font-size: 11px; color: var(--faint); font-family: var(--mono); letter-spacing: 0.5px; }
+  .rail-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 2px;
+    color: var(--faint); padding: 14px 8px 8px;
+  }
+  .rail-nav { display: flex; flex-direction: column; gap: 4px; }
+  .rail-btn {
+    display: flex; align-items: center; gap: 10px;
+    background: none; border: 1px solid transparent; border-radius: 9px;
+    color: var(--dim); font-family: var(--mono); font-size: 13px;
+    padding: 10px 12px; cursor: pointer; text-align: left; width: 100%;
+  }
+  .rail-btn:hover { background: var(--panel); color: var(--ink); }
+  .rail-btn.active {
+    background: var(--signal-soft); border-color: rgba(255, 178, 36, 0.35); color: var(--signal);
+  }
+  .rail-btn .glyph { width: 18px; text-align: center; }
+  .telemetry { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 16px; }
+  .tmod {
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+    background: var(--panel-2);
+    display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 11px;
+  }
+  .tmod .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+  .tmod.ready .dot { background: var(--pulse); box-shadow: 0 0 8px var(--pulse); }
+  .tmod.busy .dot { background: var(--signal); box-shadow: 0 0 8px var(--signal); animation: blink 1s infinite; }
+  .tmod .tname { color: var(--dim); letter-spacing: 1px; }
+  .tmod .tstate { margin-left: auto; color: var(--faint); }
+  .tmod.ready .tstate { color: var(--pulse); }
+  .tmod.busy .tstate { color: var(--signal); }
+  /* ---------- main column ---------- */
+  .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; z-index: 1; }
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 30px 14px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(11, 19, 34, 0.9), rgba(11, 19, 34, 0.55));
+    backdrop-filter: blur(6px);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .session-tag { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; color: var(--faint); }
+  #view-title { font-family: var(--mono); font-size: 17px; letter-spacing: 4px; color: var(--ink); margin: 0; font-weight: 700; }
+  #view-title em { font-style: normal; color: var(--signal); }
+  .net-status {
+    margin-left: auto; font-family: var(--mono); font-size: 11px; letter-spacing: 1px;
+    display: flex; align-items: center; gap: 8px; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 20px; padding: 6px 13px; background: var(--panel-2);
+  }
+  .net-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pulse); box-shadow: 0 0 8px var(--pulse); }
+  .net-status.offline .dot { background: var(--signal); box-shadow: 0 0 8px var(--signal); }
+  /* ---------- views ---------- */
+  .view { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  .view.active { display: flex; }
+  .thread-scroll { flex: 1; overflow-y: auto; padding: 26px 30px 12px; display: flex; justify-content: center; }
+  .thread { width: 100%; max-width: 780px; display: flex; flex-direction: column; gap: 20px; padding-bottom: 10px; }
+  .day-rule {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--faint); font-size: 11px; font-family: var(--mono); letter-spacing: 2px;
+  }
+  .day-rule::before, .day-rule::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+  .boot-line {
+    font-family: var(--mono); font-size: 12px; color: var(--faint); line-height: 1.9;
+    border: 1px solid var(--line); border-left: 3px solid var(--signal);
+    background: var(--panel-2); padding: 12px 16px; border-radius: 0 10px 10px 0;
+  }
+  .boot-line b { color: var(--pulse); font-weight: 600; }
+  .msg-row { display: flex; gap: 12px; align-items: flex-end; }
+  .msg-row.user { flex-direction: row-reverse; }
+  .avatar {
+    width: 34px; height: 34px; flex-shrink: 0; margin-bottom: 24px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; font-family: var(--mono);
+  }
+  .avatar.bot {
+    background: linear-gradient(135deg, var(--signal), #FF7A1A); color: #0A0F1C;
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+  .avatar.you {
+    background: var(--panel); color: var(--dim);
+    border: 1px solid var(--line-bright); border-radius: 50%;
+  }
+  .bubble-col { max-width: 72%; display: flex; flex-direction: column; }
+  .msg-row.user .bubble-col { align-items: flex-end; }
+  .bubble {
+    padding: 12px 16px; font-size: 14.5px; line-height: 1.6; max-width: 100%;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  }
+  .bot .bubble { background: var(--panel); border: 1px solid var(--line-bright); color: var(--ink); }
+  .user .bubble { background: linear-gradient(135deg, #2B4BD8, #1E3296); color: #fff; border: 1px solid var(--user-edge); }
+  .meta {
+    font-size: 11px; color: var(--faint); margin-top: 6px;
+    display: flex; align-items: center; gap: 8px; font-family: var(--mono); letter-spacing: 0.5px;
+  }
+  .speak-reply { background: none; border: none; cursor: pointer; font-size: 13px; padding: 0 2px; opacity: 0.55; filter: grayscale(0.4); }
+  .speak-reply:hover { opacity: 1; }
+  .typing .bubble { display: flex; gap: 6px; align-items: center; padding: 16px 18px; }
+  .typing span { width: 7px; height: 7px; background: var(--signal); opacity: 0.5; animation: blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .typing span { animation: none; opacity: 0.7; } * { transition: none !important; } }
+  /* ---------- composer dock ---------- */
+  .dock { padding: 6px 30px 20px; display: flex; justify-content: center; }
+  .dock-inner { width: 100%; max-width: 780px; }
+  .hints { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .hints button {
+    border: 1px solid var(--line-bright); background: var(--panel-2);
+    color: var(--dim); font-size: 12.5px; font-family: var(--mono);
+    padding: 7px 14px; border-radius: 4px 14px 14px 14px; cursor: pointer;
+  }
+  .hints button:hover { border-color: var(--signal); color: var(--signal); }
+  .composer {
+    display: flex; gap: 10px; align-items: center;
+    border: 1px solid var(--line-bright); border-radius: 14px;
+    padding: 8px 8px 8px 8px; background: var(--deck);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 8px 32px rgba(0,0,0,0.45);
+  }
+  .composer:focus-within { border-color: var(--signal); box-shadow: 0 0 0 1px rgba(255,178,36,0.4), 0 0 24px rgba(255,178,36,0.12); }
+  .composer input {
+    flex: 1; border: none; outline: none; background: transparent;
+    font-size: 14.5px; font-family: var(--sans); color: var(--ink); padding: 8px 10px; min-width: 0;
+  }
+  .composer input::placeholder { color: var(--faint); }
+  .iconbtn {
+    background: var(--panel); border: 1px solid var(--line-bright); color: var(--dim);
+    font-size: 17px; cursor: pointer; width: 42px; height: 42px; border-radius: 10px; flex-shrink: 0;
+  }
+  .iconbtn:hover { border-color: var(--signal); color: var(--signal); }
+  .iconbtn.live { border-color: var(--danger); color: var(--danger); animation: blink 1s infinite; }
+  .sendbtn {
+    background: linear-gradient(135deg, var(--signal), #FF8A1A); color: #0A0F1C; border: none;
+    font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 1px;
+    padding: 0 24px; height: 42px; border-radius: 10px; cursor: pointer; flex-shrink: 0;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+  }
+  .sendbtn:hover { filter: brightness(1.1); }
+  .sendbtn:focus-visible, .iconbtn:focus-visible, .rail-btn:focus-visible, .btn:focus-visible, .tab:focus-visible {
+    outline: 2px solid var(--signal); outline-offset: 2px;
+  }
+  /* ---------- setup deck ---------- */
+  .setup-scroll { flex: 1; overflow-y: auto; padding: 26px 30px 40px; display: flex; justify-content: center; }
+  .setup-card { width: 100%; max-width: 780px; }
+  .setup-head h2 { font-family: var(--mono); font-size: 20px; margin: 0; letter-spacing: 3px; }
+  .setup-head h2 em { font-style: normal; color: var(--signal); }
+  .setup-head p { margin: 8px 0 0; font-size: 13.5px; color: var(--dim); line-height: 1.65; max-width: 64ch; }
+  .tabs { display: flex; gap: 6px; margin-top: 18px; border-bottom: 1px solid var(--line); padding-bottom: 0; }
+  .tab {
+    border: 1px solid transparent; border-bottom: none; background: none;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: 1.5px;
+    color: var(--faint); padding: 11px 18px; cursor: pointer;
+    border-radius: 10px 10px 0 0; margin-bottom: -1px;
+  }
+  .tab[aria-selected="true"] { color: var(--signal); background: var(--panel); border-color: var(--line-bright); }
+  .tabpane {
+    display: none; background: var(--panel); border: 1px solid var(--line-bright);
+    border-top: none; border-radius: 0 0 14px 14px; padding: 24px;
+  }
+  .tabpane.active { display: block; }
+  .model-row { display: flex; gap: 16px; align-items: flex-start; }
+  .model-badge {
+    width: 46px; height: 46px; flex-shrink: 0;
+    background: var(--signal-soft); color: var(--signal);
+    border: 1px solid rgba(255, 178, 36, 0.4);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13px; font-family: var(--mono);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+  .model-row h3 { margin: 0; font-size: 15.5px; }
+  .model-row .sub { margin: 6px 0 0; font-size: 13.5px; color: var(--dim); line-height: 1.65; }
+  .model-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .pill {
+    font-size: 11px; font-weight: 600; font-family: var(--mono); letter-spacing: 0.5px;
+    padding: 4px 12px; border-radius: 4px;
+    background: var(--panel-2); border: 1px solid var(--line-bright); color: var(--dim);
+  }
+  .pill.ok { background: rgba(55, 229, 168, 0.1); border-color: rgba(55, 229, 168, 0.45); color: var(--pulse); }
+  .pill.warn { background: var(--signal-soft); border-color: rgba(255, 178, 36, 0.45); color: var(--signal); }
+  .optgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .optgrid label { font-size: 11px; font-weight: 700; font-family: var(--mono); letter-spacing: 1.5px; color: var(--faint); display: flex; flex-direction: column; gap: 6px; }
+  .optgrid select, #tts-sample {
+    font-family: var(--sans); font-size: 13.5px; color: var(--ink);
+    border: 1px solid var(--line-bright); border-radius: 8px; padding: 9px 11px; background: var(--panel-2);
+  }
+  .optgrid select:focus, #tts-sample:focus { border-color: var(--signal); outline: none; box-shadow: 0 0 0 2px rgba(255,178,36,0.25); }
+  #tts-sample { width: 100%; margin-top: 10px; resize: vertical; line-height: 1.6; }
+  .btnrow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .btn {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: 1px;
+    padding: 10px 20px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line-bright); background: var(--panel-2); color: var(--ink);
+  }
+  .btn:hover:not(:disabled) { border-color: var(--signal); color: var(--signal); }
+  .btn.primary { background: linear-gradient(135deg, var(--signal), #FF8A1A); border: none; color: #0A0F1C; }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.1); color: #0A0F1C; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn.danger { color: var(--danger); }
+  .btn.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+  .progress { margin-top: 16px; display: none; }
+  .progress.on { display: block; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 5px; overflow: hidden; border: 1px solid var(--line-bright); }
+  .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--signal), #FF8A1A); transition: width 0.2s; box-shadow: 0 0 12px rgba(255,178,36,0.6); }
+  .plog { font-size: 12.5px; color: var(--dim); margin-top: 9px; line-height: 1.6; font-family: var(--mono); }
+  .mic-test { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 20px; }
+  .mic-test h4 { margin: 0 0 5px; font-size: 14px; font-family: var(--mono); letter-spacing: 1.5px; }
+  .mic-test h4 em { color: var(--signal); font-style: normal; }
+  .mic-test p { margin: 0 0 12px; font-size: 13px; color: var(--dim); line-height: 1.65; max-width: 64ch; }
+  .transcript {
+    margin-top: 12px; font-size: 14px; line-height: 1.65;
+    background: var(--panel-2); border: 1px solid var(--line-bright); border-radius: 8px;
+    padding: 13px 15px; min-height: 54px;
+  }
+  .coming {
+    border: 1px dashed var(--line-bright); border-radius: 12px; padding: 22px;
+    color: var(--dim); font-size: 13.5px; line-height: 1.7;
+  }
+  .rec-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); margin-right: 8px; animation: blink 1s infinite; }
+  #tts-audio { width: 100%; margin-top: 12px; accent-color: var(--signal); }
+  @media (max-width: 860px) {
+    .rail { display: none; }
+    .topbar, .thread-scroll, .dock, .setup-scroll { padding-left: 16px; padding-right: 16px; }
+    .bubble-col { max-width: 86%; }
+    .optgrid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="rail" aria-label="Console sections">
+  <div class="brand">
+    <div class="core"></div>
+    <div>
+      <h1>MERIDIAN</h1>
+      <p>ON-DEVICE CONSOLE</p>
+    </div>
+  </div>
+  <div class="rail-label">NAVIGATE</div>
+  <div class="rail-nav">
+    <button class="rail-btn active" id="rail-chat"><span class="glyph">◈</span>Comms link</button>
+    <button class="rail-btn" id="rail-setup"><span class="glyph">⬢</span>Module bay</button>
+  </div>
+  <div class="rail-label">MODULES</div>
+  <div class="telemetry">
+    <div class="tmod" id="tm-stt"><span class="dot"></span><span class="tname">STT</span><span class="tstate">idle</span></div>
+    <div class="tmod" id="tm-brain"><span class="dot"></span><span class="tname">BRAIN</span><span class="tstate">soon</span></div>
+    <div class="tmod" id="tm-tts"><span class="dot"></span><span class="tname">TTS</span><span class="tstate">idle</span></div>
+  </div>
+</nav>
+
+<div class="stage">
+  <header class="topbar">
+    <div>
+      <div class="session-tag" id="session-tag">SESSION // LOCAL ONLY</div>
+      <h2 id="view-title">COMMS <em>//</em> LINK</h2>
+    </div>
+    <div class="net-status" id="net-status"><span class="dot"></span><span id="net-label">OFFLINE READY</span></div>
+  </header>
+
+  <!-- ============ CHAT ============ -->
+  <div id="view-chat" class="view active">
+    <div class="thread-scroll">
+      <div class="thread" id="thread" aria-live="polite">
+        <div class="day-rule">UPLINK ESTABLISHED — TODAY</div>
+        <div class="boot-line" id="boot-line">meridian-core :: all inference runs on this device — <b id="boot-modules">0/2 modules loaded</b><br>bulkhead check :: no audio leaves this machine · models cached in-browser</div>
+
+        <div class="msg-row bot">
+          <div class="avatar bot"></div>
+          <div class="bubble-col">
+            <div class="bubble">Good morning. I can look up invoices, reschedule meetings, and draft summaries. What would you like to start with?</div>
+            <div class="meta">MERIDIAN · 09:41 <button class="speak-reply" title="Read aloud" aria-label="Read message aloud">🔊</button></div>
+          </div>
+        </div>
+
+        <div class="msg-row user">
+          <div class="avatar you">YOU</div>
+          <div class="bubble-col">
+            <div class="bubble">Can you check the status of invoice 2049?</div>
+            <div class="meta">YOU · 09:42</div>
+          </div>
+        </div>
+
+        <div class="msg-row bot">
+          <div class="avatar bot"></div>
+          <div class="bubble-col">
+            <div class="bubble">Invoice 2049 for $4,820 was sent on October 20 and is due November 3. It is currently awaiting approval from the client.</div>
+            <div class="meta">MERIDIAN · 09:42 <button class="speak-reply" title="Read aloud" aria-label="Read message aloud">🔊</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="dock">
+      <div class="dock-inner">
+        <div class="hints">
+          <button data-q="Draft a follow-up email for invoice 2049">Draft follow-up email</button>
+          <button data-q="Reschedule my Thursday review to Friday">Reschedule Thursday review</button>
+          <button data-q="Summarize this week's open items">Summarize open items</button>
+        </div>
+        <div class="composer">
+          <button class="iconbtn" id="micbtn" title="Dictate with offline speech recognition" aria-label="Dictate">◉</button>
+          <input id="input" type="text" placeholder="Transmit a message…" autocomplete="off" aria-label="Write a message">
+          <button class="sendbtn" id="send">SEND</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SETUP ============ -->
+  <div id="view-setup" class="view">
+    <div class="setup-scroll">
+      <div class="setup-card">
+        <div class="setup-head">
+          <h2>MODULE <em>//</em> BAY</h2>
+          <p>Each module downloads once, stays cached in this browser, then runs fully on-device with zero network. Load speech recognition first, then the voice.</p>
+        </div>
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected="true" data-tab="stt" id="tab-stt">STT</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="brain" id="tab-brain">BRAIN</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="tts" id="tab-tts">TTS</button>
+        </div>
+
+        <div class="tabpane active" id="pane-stt" role="tabpanel">
+          <div class="model-row">
+            <div class="model-badge">STT</div>
+            <div>
+              <h3>Whisper tiny.en — offline speech recognition</h3>
+              <p class="sub">Small English-only Whisper (~39M params) running in-page on WebGPU or WASM. Download once, cached in-browser, then transcribes with no network.</p>
+              <div class="model-meta">
+                <span class="pill">~75 MB</span>
+                <span class="pill" id="stt-status">NOT LOADED</span>
+              </div>
+            </div>
+          </div>
+          <div class="btnrow">
+            <button class="btn primary" id="stt-download">DOWNLOAD MODULE</button>
+            <button class="btn danger" id="stt-remove" disabled>PURGE CACHE</button>
+          </div>
+          <div class="progress" id="stt-progress">
+            <div class="bar"><div id="stt-bar"></div></div>
+            <div class="plog" id="stt-log">Standby.</div>
+          </div>
+          <div class="mic-test">
+            <h4><em>◇</em> FIELD TEST — MICROPHONE</h4>
+            <p>Record a short clip. Transcribed on-device. Requires the module above plus microphone permission.</p>
+            <div class="btnrow" style="margin-top:0">
+              <button class="btn" id="stt-record" disabled>● RECORD</button>
+              <button class="btn" id="stt-stop" disabled>■ STOP</button>
+            </div>
+            <div class="transcript" id="stt-transcript">Transcription output appears here.</div>
+          </div>
+        </div>
+
+        <div class="tabpane" id="pane-brain" role="tabpanel">
+          <div class="coming"><strong>BRAIN — next module.</strong><br>Offline language model slot: download, cache status, and a test-prompt terminal, same pattern as STT.</div>
+        </div>
+
+        <div class="tabpane" id="pane-tts" role="tabpanel">
+          <div class="model-row">
+            <div class="model-badge">TTS</div>
+            <div style="flex:1;min-width:0">
+              <h3>Kokoro 82M — natural offline voice</h3>
+              <p class="sub">Compact realistic TTS running entirely in-page. Download once, cached in-browser, then speaks with no network. GPU is fastest; WASM runs anywhere.</p>
+              <div class="model-meta">
+                <span class="pill" id="tts-size">~86 MB</span>
+                <span class="pill" id="tts-status">NOT LOADED</span>
+                <span class="pill warn" id="tts-device-pill">WASM</span>
+              </div>
+              <div class="optgrid">
+                <label>RUN SPEED
+                  <select id="tts-device">
+                    <option value="webgpu">GPU (WebGPU) — fastest</option>
+                    <option value="wasm" selected>WASM (CPU) — anywhere</option>
+                  </select>
+                </label>
+                <label>MODEL SIZE
+                  <select id="tts-dtype">
+                    <option value="q8">Balanced (~86 MB)</option>
+                    <option value="q4">Smallest (~154 MB total)</option>
+                    <option value="fp32">Full quality (~326 MB)</option>
+                  </select>
+                </label>
+                <label>VOICE
+                  <select id="tts-voice">
+                    <option value="af_bella">Bella — warm female</option>
+                    <option value="af_sarah">Sarah — clear female</option>
+                    <option value="af_nicole">Nicole — soft female</option>
+                    <option value="af_sky">Sky — bright female</option>
+                    <option value="am_adam">Adam — steady male</option>
+                    <option value="am_michael">Michael — deep male</option>
+                    <option value="bf_emma">Emma — British female</option>
+                    <option value="bf_isabella">Isabella — British female</option>
+                    <option value="bm_george">George — British male</option>
+                    <option value="bm_lewis">Lewis — British male</option>
+                  </select>
+                </label>
+                <label>SPEAKING SPEED
+                  <select id="tts-speed">
+                    <option value="0.9">Relaxed (0.9×)</option>
+                    <option value="1" selected>Natural (1.0×)</option>
+                    <option value="1.15">Brisk (1.15×)</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="btnrow">
+            <button class="btn primary" id="tts-download">DOWNLOAD VOICE</button>
+            <button class="btn danger" id="tts-remove" disabled>PURGE CACHE</button>
+          </div>
+          <div class="progress" id="tts-progress">
+            <div class="bar"><div id="tts-bar"></div></div>
+            <div class="plog" id="tts-log">Standby.</div>
+          </div>
+          <div class="mic-test">
+            <h4><em>◇</em> FIELD TEST — VOICE</h4>
+            <p>Preview speaks instantly with your built-in system voice — no download. Speak sample uses the Kokoro offline voice with your settings.</p>
+            <textarea id="tts-sample" rows="2">Hello! I am your offline assistant, running entirely on your device.</textarea>
+            <div class="btnrow">
+              <button class="btn" id="tts-preview">▶ PREVIEW INSTANTLY</button>
+              <button class="btn primary" id="tts-speak" disabled>◈ SPEAK SAMPLE</button>
+              <button class="btn" id="tts-stop-speak" disabled>■ STOP</button>
+            </div>
+            <div class="plog" id="tts-perf"></div>
+            <audio id="tts-audio" controls style="display:none"></audio>
+          </div>
+          <div class="mic-test">
+            <h4><em>◇</em> SAVED SETTINGS</h4>
+            <p>Voice, speed, run-speed, and size persist in this browser. Changing a setting flags the voice for reload.</p>
+            <div class="btnrow" style="margin-top:0">
+              <button class="btn" id="tts-reset-settings">RESET DEFAULTS</button>
+            </div>
+            <div class="plog" id="tts-settings-note"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Plain script: UI always works even with zero network. AI engines lazy-load on Download. */
+const $ = (id) => document.getElementById(id);
+const thread = $("thread"), input = $("input"), send = $("send");
+
+/* ---------- telemetry + boot line ---------- */
+function setTmod(id, state, label) {
+  const el = $(id);
+  el.classList.remove("ready", "busy");
+  if (state) el.classList.add(state);
+  el.querySelector(".tstate").textContent = label;
+}
+function refreshBoot() {
+  const n = (window.__sttReady ? 1 : 0) + (window.__ttsReady ? 1 : 0);
+  $("boot-modules").textContent = n + "/2 modules loaded";
+}
+window.__refreshBoot = refreshBoot;
+window.__setTmod = setTmod;
+
+/* ---------- view switching ---------- */
+const viewChat = $("view-chat"), viewSetup = $("view-setup");
+const railChat = $("rail-chat"), railSetup = $("rail-setup");
+const viewTitle = $("view-title");
+function showView(which) {
+  const toChat = which === "chat";
+  viewChat.classList.toggle("active", toChat);
+  viewSetup.classList.toggle("active", !toChat);
+  railChat.classList.toggle("active", toChat);
+  railSetup.classList.toggle("active", !toChat);
+  viewTitle.innerHTML = toChat ? "COMMS <em>//</em> LINK" : "MODULE <em>//</em> BAY";
+  window.scrollTo(0, 0);
+}
+railChat.addEventListener("click", () => showView("chat"));
+railSetup.addEventListener("click", () => showView("setup"));
+
+document.querySelectorAll(".tab[data-tab]").forEach((t) => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab[data-tab]").forEach((x) => x.setAttribute("aria-selected", "false"));
+    document.querySelectorAll(".tabpane").forEach((p) => p.classList.remove("active"));
+    t.setAttribute("aria-selected", "true");
+    $("pane-" + t.getAttribute("data-tab")).classList.add("active");
+  });
+});
+
+/* ---------- offline badge ---------- */
+function refreshNet() {
+  const off = !navigator.onLine;
+  $("net-status").classList.toggle("offline", off);
+  $("net-label").textContent = off ? "OFFLINE — ALL LOCAL" : "OFFLINE READY";
+}
+window.addEventListener("online", refreshNet);
+window.addEventListener("offline", refreshNet);
+refreshNet();
+
+/* ---------- chat demo brain ---------- */
+const replies = [
+  "Noted. Logged to today's summary buffer.",
+  "Copy that. Give me a date or reference number and I'll pull the exact record.",
+  "Done. Draft staged with the relevant figures attached for review.",
+  "Invoice 2049 remains awaiting approval. Want me to draft a reminder transmission?",
+];
+let replyIndex = 0;
+function timeNow() {
+  const d = new Date();
+  let h = d.getHours(); const m = d.getMinutes();
+  const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
+  return h + ":" + (m < 10 ? "0" + m : m) + " " + ap;
+}
+function scrollDown() {
+  const sc = document.querySelector(".thread-scroll");
+  if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
+}
+function addUser(text) {
+  const row = document.createElement("div");
+  row.className = "msg-row user";
+  row.innerHTML = '<div class="avatar you">YOU</div><div class="bubble-col"><div class="bubble"></div><div class="meta">YOU · ' + timeNow() + "</div></div>";
+  row.querySelector(".bubble").textContent = text;
+  thread.appendChild(row); scrollDown();
+}
+function showTyping() {
+  const row = document.createElement("div");
+  row.className = "msg-row bot typing"; row.id = "typing-row";
+  row.innerHTML = '<div class="avatar bot"></div><div class="bubble-col"><div class="bubble"><span></span><span></span><span></span></div></div>';
+  thread.appendChild(row); scrollDown();
+}
+function hideTyping() { const t = $("typing-row"); if (t) t.remove(); }
+function addBot(text) {
+  const row = document.createElement("div");
+  row.className = "msg-row bot";
+  row.innerHTML = '<div class="avatar bot"></div><div class="bubble-col"><div class="bubble"></div><div class="meta">MERIDIAN · ' + timeNow() + ' <button class="speak-reply" title="Read aloud" aria-label="Read message aloud">🔊</button></div></div>';
+  row.querySelector(".bubble").textContent = text;
+  thread.appendChild(row); scrollDown();
+}
+function respond(text) {
+  showTyping();
+  setTimeout(() => {
+    hideTyping();
+    const lower = text.toLowerCase();
+    let answer;
+    if (lower.includes("invoice")) answer = replies[3];
+    else if (lower.includes("resched")) answer = "Thursday review shifted to Friday 10:00. Attendees notified.";
+    else if (lower.includes("summar")) answer = "3 open items: invoice 2049 awaiting approval, Thursday review moved to Friday, one contract draft pending sign-off.";
+    else if (lower.includes("email") || lower.includes("draft")) answer = replies[2];
+    else { answer = replies[replyIndex % replies.length]; replyIndex++; }
+    addBot(answer);
+  }, 1300);
+}
+function submit() {
+  const v = input.value.trim();
+  if (!v) return;
+  addUser(v); input.value = ""; input.focus(); respond(v);
+}
+send.addEventListener("click", submit);
+input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+document.querySelectorAll(".hints button").forEach((b) => {
+  b.addEventListener("click", () => { input.value = b.getAttribute("data-q"); submit(); });
+});
+input.focus();
+
+/* ---------- offline STT: Whisper tiny.en ---------- */
+const STT_MODEL = "Xenova/whisper-tiny.en";
+const sttDownload = $("stt-download"), sttRemove = $("stt-remove"), sttStatus = $("stt-status");
+const sttProgress = $("stt-progress"), sttBar = $("stt-bar"), sttLog = $("stt-log");
+const sttRecord = $("stt-record"), sttStop = $("stt-stop"), sttTranscript = $("stt-transcript");
+const micbtn = $("micbtn");
+let transcriber = null, mediaRecorder = null, audioChunks = [];
+
+function setSttStatus(text, ok) {
+  sttStatus.textContent = text;
+  sttStatus.classList.toggle("ok", !!ok);
+}
+/* Lazy engine loader: tries versioned CDN builds, falls back across CDNs. */
+const TJS_URLS = [
+  "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2/+esm",
+  "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm",
+  "https://unpkg.com/@huggingface/transformers@3.7.2/+esm",
+  "https://esm.sh/@huggingface/transformers@3.7.2"
+];
+const KOKORO_URLS = [
+  "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm",
+  "https://cdn.jsdelivr.net/npm/kokoro-js@1/+esm",
+  "https://unpkg.com/kokoro-js@1.2.1/+esm",
+  "https://esm.sh/kokoro-js@1.2.1"
+];
+let __tjs = null, __kokoroMod = null;
+async function loadTJS(logEl) {
+  if (__tjs) return __tjs;
+  let lastErr = null;
+  for (const u of TJS_URLS) {
+    try {
+      if (logEl) logEl.textContent = "Fetching engine… " + new URL(u).hostname;
+      __tjs = await import(/* @vite-ignore */u);
+      return __tjs;
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error("Engine unreachable (tried jsDelivr, unpkg, esm.sh). Check connection, then retry. Detail: " + (lastErr && lastErr.message || lastErr));
+}
+async function loadKokoroMod() {
+  if (__kokoroMod) return __kokoroMod;
+  let lastErr = null;
+  for (const u of KOKORO_URLS) {
+    try { __kokoroMod = await import(/* @vite-ignore */u); return __kokoroMod; }
+    catch (e) { lastErr = e; }
+  }
+  throw new Error("Voice engine unreachable (tried jsDelivr, unpkg, esm.sh). Check connection, then retry. Detail: " + (lastErr && lastErr.message || lastErr));
+}
+
+sttDownload.addEventListener("click", async () => {
+  sttDownload.disabled = true;
+  sttProgress.classList.add("on");
+  sttBar.style.width = "2%";
+  setTmod("tm-stt", "busy", "fetch");
+  sttLog.textContent = "Loading engine… (first visit needs internet; afterwards fully offline)";
+  try {
+    const TJS = await loadTJS(sttLog);
+    transcriber = await TJS.pipeline("automatic-speech-recognition", STT_MODEL, {
+      progress_callback: (p) => {
+        if (p.status === "downloading" || p.status === "download") {
+          const pct = p.progress != null ? Math.round(p.progress) : 0;
+          sttBar.style.width = pct + "%";
+          sttLog.textContent = "Downloading module… " + pct + "% — " + (p.file || "weights");
+        } else if (p.status === "loading" || p.status === "load") {
+          sttLog.textContent = "Loading module into memory… " + (p.file || "");
+          sttBar.style.width = "100%";
+        } else sttLog.textContent = p.status + " " + (p.file || "");
+      },
+    });
+    sttBar.style.width = "100%";
+    sttLog.textContent = "Ready. Module cached in-browser — works offline from now on.";
+    setSttStatus("LOADED — CACHED OFFLINE", true);
+    window.__sttReady = true; setTmod("tm-stt", "ready", "ready"); refreshBoot();
+    sttRecord.disabled = false; sttRemove.disabled = false;
+    sttDownload.disabled = false; sttDownload.textContent = "RELOAD MODULE";
+  } catch (err) {
+    sttLog.textContent = "Failed: " + err.message;
+    setTmod("tm-stt", "", "idle");
+    sttDownload.disabled = false;
+  }
+});
+sttRemove.addEventListener("click", async () => {
+  if (!("caches" in window)) { sttLog.textContent = "Cache storage not exposed — cannot purge here."; return; }
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => /transformers|xenova|huggingface/i.test(k)).map((k) => caches.delete(k)));
+  transcriber = null; window.__sttReady = false; setTmod("tm-stt", "", "idle"); refreshBoot();
+  sttRecord.disabled = true; sttRemove.disabled = true;
+  sttDownload.textContent = "DOWNLOAD MODULE";
+  setSttStatus("NOT LOADED", false);
+  sttLog.textContent = "Cache purged. Download again for offline transcription.";
+  sttBar.style.width = "0%";
+});
+function decodeToMono16k(blob) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx({ sampleRate: 16000 });
+  return blob.arrayBuffer()
+    .then((buf) => ctx.decodeAudioData(buf))
+    .then((audio) => {
+      const data = audio.getChannelData(0);
+      let out;
+      if (audio.sampleRate === 16000) out = data;
+      else {
+        const ratio = audio.sampleRate / 16000;
+        const len = Math.floor(data.length / ratio);
+        out = new Float32Array(len);
+        for (let i = 0; i < len; i++) out[i] = data[Math.floor(i * ratio)];
+      }
+      ctx.close(); return out;
+    });
+}
+function transcribeBlob(blob) {
+  if (!transcriber) { sttTranscript.textContent = "Load the STT module first, then record."; return; }
+  sttTranscript.innerHTML = '<span class="rec-dot"></span>Transcribing on-device…';
+  decodeToMono16k(blob)
+    .then((samples) => transcriber(samples))
+    .then((result) => {
+      const text = (result && result.text ? result.text : "").trim();
+      sttTranscript.textContent = text || "(No speech detected — move closer to the mic.)";
+    })
+    .catch((err) => { sttTranscript.textContent = "Transcription failed: " + err.message; });
+}
+sttRecord.addEventListener("click", async () => {
+  if (!navigator.mediaDevices?.getUserMedia) { sttTranscript.textContent = "Mic capture unavailable in this browser."; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) audioChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      sttRecord.disabled = false; sttStop.disabled = true;
+      transcribeBlob(new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" }));
+    };
+    mediaRecorder.start();
+    sttRecord.disabled = true; sttStop.disabled = false;
+    sttTranscript.innerHTML = '<span class="rec-dot"></span>Recording… press STOP when done.';
+  } catch { sttTranscript.textContent = "Mic permission denied. Allow access and retry."; }
+});
+sttStop.addEventListener("click", () => { if (mediaRecorder?.state !== "inactive") mediaRecorder.stop(); });
+
+/* composer mic: dictate into message box */
+let chatRec = null, chatRecording = false;
+micbtn.addEventListener("click", async () => {
+  if (chatRecording && chatRec?.state !== "inactive") { chatRec.stop(); return; }
+  if (!transcriber) {
+    showView("setup");
+    sttLog.textContent = "Load the STT module first, then dictate — here or in chat.";
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) { input.placeholder = "Mic capture unavailable"; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const chunks = [];
+    const rec = new MediaRecorder(stream);
+    chatRec = rec; chatRecording = true;
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      chatRecording = false; micbtn.textContent = "◉"; micbtn.classList.remove("live");
+      decodeToMono16k(new Blob(chunks, { type: "audio/webm" }))
+        .then((samples) => { input.placeholder = "Transcribing…"; return transcriber(samples); })
+        .then((result) => {
+          input.value = (result?.text || "").trim();
+          input.placeholder = "Transmit a message…"; input.focus();
+        })
+        .catch((err) => { input.placeholder = "Transcription failed: " + err.message; });
+    };
+    rec.start();
+    micbtn.textContent = "■"; micbtn.classList.add("live");
+    input.placeholder = "Listening… press ◉ again to stop";
+    setTimeout(() => { if (rec.state !== "inactive") rec.stop(); }, 30000);
+  } catch { input.placeholder = "Mic permission denied"; }
+});
+
+/* ---------- offline TTS: Kokoro 82M ---------- */
+const TTS_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const ttsDevice = $("tts-device"), ttsDtype = $("tts-dtype"), ttsVoice = $("tts-voice"), ttsSpeed = $("tts-speed");
+const ttsDownload = $("tts-download"), ttsRemove = $("tts-remove"), ttsStatus = $("tts-status");
+const ttsSize = $("tts-size"), ttsDevicePill = $("tts-device-pill");
+const ttsProgress = $("tts-progress"), ttsBar = $("tts-bar"), ttsLog = $("tts-log");
+const ttsSample = $("tts-sample"), ttsPreview = $("tts-preview"), ttsSpeak = $("tts-speak");
+const ttsStopSpeak = $("tts-stop-speak"), ttsPerf = $("tts-perf"), ttsAudio = $("tts-audio");
+const ttsResetSettings = $("tts-reset-settings"), ttsSettingsNote = $("tts-settings-note");
+let kokoro = null, ttsLoadedKey = "";
+const DTYPE_LABELS = { q8: "~86 MB", q4: "~154 MB total", fp32: "~326 MB" };
+const TTS_DEFAULTS = { device: "wasm", dtype: "q8", voice: "af_bella", speed: "1" };
+const TTS_STORE = "meridian-tts-settings";
+
+function readTts() { try { return JSON.parse(localStorage.getItem(TTS_STORE)); } catch { return null; } }
+function writeTts(note) {
+  try { localStorage.setItem(TTS_STORE, JSON.stringify({ device: ttsDevice.value, dtype: ttsDtype.value, voice: ttsVoice.value, speed: ttsSpeed.value })); } catch {}
+  if (note) ttsSettingsNote.textContent = note;
+}
+(function restoreTts() {
+  const s = readTts() || TTS_DEFAULTS;
+  if (ttsDevice.querySelector('[value="' + s.device + '"]')) ttsDevice.value = s.device;
+  if (ttsDtype.querySelector('[value="' + s.dtype + '"]')) ttsDtype.value = s.dtype;
+  if (ttsVoice.querySelector('[value="' + s.voice + '"]')) ttsVoice.value = s.voice;
+  if (ttsSpeed.querySelector('[value="' + s.speed + '"]')) ttsSpeed.value = s.speed;
+  ttsDevicePill.textContent = ttsDevice.value === "webgpu" ? "GPU" : "WASM";
+  ttsSize.textContent = DTYPE_LABELS[ttsDtype.value] || "";
+  if (readTts()) ttsSettingsNote.textContent = "Restored saved voice settings.";
+})();
+const ttsKey = () => ttsDevice.value + "|" + ttsDtype.value;
+function markDirty() {
+  writeTts("Settings saved.");
+  if (kokoro && ttsKey() !== ttsLoadedKey) {
+    ttsLog.textContent = "Setting changed + saved — press RELOAD VOICE, then speak.";
+    ttsDownload.textContent = "RELOAD VOICE";
+  }
+}
+ttsDevice.addEventListener("change", () => { ttsDevicePill.textContent = ttsDevice.value === "webgpu" ? "GPU" : "WASM"; markDirty(); });
+ttsDtype.addEventListener("change", () => { ttsSize.textContent = DTYPE_LABELS[ttsDtype.value] || ""; markDirty(); });
+ttsVoice.addEventListener("change", markDirty);
+ttsSpeed.addEventListener("change", markDirty);
+ttsResetSettings.addEventListener("click", () => {
+  ttsDevice.value = TTS_DEFAULTS.device; ttsDtype.value = TTS_DEFAULTS.dtype;
+  ttsVoice.value = TTS_DEFAULTS.voice; ttsSpeed.value = TTS_DEFAULTS.speed;
+  ttsDevicePill.textContent = "WASM"; ttsSize.textContent = DTYPE_LABELS.q8;
+  try { localStorage.removeItem(TTS_STORE); } catch {}
+  ttsSettingsNote.textContent = "Defaults restored.";
+  if (kokoro && ttsKey() !== ttsLoadedKey) { ttsLog.textContent = "Defaults restored — press RELOAD VOICE."; ttsDownload.textContent = "RELOAD VOICE"; }
+});
+function setTtsStatus(text, ok) { ttsStatus.textContent = text; ttsStatus.classList.toggle("ok", !!ok); }
+
+ttsDownload.addEventListener("click", async () => {
+  ttsDownload.disabled = true;
+  ttsProgress.classList.add("on");
+  ttsBar.style.width = "2%";
+  setTmod("tm-tts", "busy", "fetch");
+  ttsLog.textContent = "Loading engine… (first visit needs internet; afterwards fully offline)";
+  try {
+    await loadTJS(ttsLog);
+    const KMod = await loadKokoroMod();
+    kokoro = await KMod.KokoroTTS.from_pretrained(TTS_MODEL, {
+      dtype: ttsDtype.value,
+      device: ttsDevice.value,
+      progress_callback: (p) => {
+        if (p.status === "downloading" || p.status === "download") {
+          const pct = p.progress != null ? Math.round(p.progress) : 0;
+          ttsBar.style.width = pct + "%";
+          ttsLog.textContent = "Downloading voice… " + pct + "% — " + (p.file || "weights");
+        } else if (p.status === "loading" || p.status === "load") {
+          ttsLog.textContent = "Loading voice into memory… " + (p.file || "");
+          ttsBar.style.width = "100%";
+        } else ttsLog.textContent = p.status + " " + (p.file || "");
+      },
+    });
+    ttsLoadedKey = ttsKey();
+    ttsBar.style.width = "100%";
+    const where = ttsDevice.value === "webgpu" ? "GPU" : "WASM";
+    ttsLog.textContent = "Ready on " + where + ". Cached in-browser — offline from now on.";
+    setTtsStatus("LOADED — CACHED OFFLINE", true);
+    window.__ttsReady = true; setTmod("tm-tts", "ready", "ready"); refreshBoot();
+    ttsSpeak.disabled = false; ttsRemove.disabled = false;
+    ttsDownload.disabled = false; ttsDownload.textContent = "RELOAD VOICE";
+  } catch (err) {
+    let hint = "";
+    if (ttsDevice.value === "webgpu" && /webgpu/i.test(err.message || "")) hint = " WebGPU unsupported here — switch to WASM.";
+    ttsLog.textContent = "Failed: " + err.message + hint;
+    setTmod("tm-tts", "", "idle");
+    ttsDownload.disabled = false;
+  }
+});
+ttsRemove.addEventListener("click", async () => {
+  if (!("caches" in window)) { ttsLog.textContent = "Cache storage not exposed — cannot purge here."; return; }
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => /transformers|huggingface|onnx-community|kokoro/i.test(k)).map((k) => caches.delete(k)));
+  kokoro = null; ttsLoadedKey = "";
+  window.__ttsReady = false; setTmod("tm-tts", "", "idle"); refreshBoot();
+  ttsSpeak.disabled = true; ttsRemove.disabled = true;
+  try { ttsAudio.pause(); } catch {}
+  ttsAudio.style.display = "none";
+  ttsDownload.textContent = "DOWNLOAD VOICE";
+  setTtsStatus("NOT LOADED", false);
+  ttsLog.textContent = "Cache purged. Download again for offline speech.";
+  ttsBar.style.width = "0%"; ttsPerf.textContent = "";
+});
+async function speakText(text) {
+  if (!kokoro) {
+    showView("setup");
+    ttsLog.textContent = "Download the voice first — then the speaker reads aloud.";
+    return;
+  }
+  if (ttsKey() !== ttsLoadedKey) { ttsLog.textContent = "Setting changed — press RELOAD VOICE first."; return; }
+  ttsSpeak.disabled = true; ttsStopSpeak.disabled = false;
+  ttsLog.textContent = "Synthesizing on-device…";
+  const t0 = performance.now();
+  try {
+    const audio = await kokoro.generate(text, { voice: ttsVoice.value, speed: parseFloat(ttsSpeed.value) });
+    const ms = Math.round(performance.now() - t0);
+    ttsPerf.textContent = "Rendered " + (audio.duration ? audio.duration.toFixed(1) + "s" : "") + " of speech in " + (ms / 1000).toFixed(1) + "s on " + (ttsDevice.value === "webgpu" ? "GPU" : "WASM") + ".";
+    ttsAudio.src = URL.createObjectURL(audio.toBlob());
+    ttsAudio.style.display = "block";
+    ttsAudio.play();
+    ttsLog.textContent = "Playing. Replay from the player.";
+    await new Promise((resolve) => { ttsAudio.onended = () => { ttsSpeak.disabled = false; ttsStopSpeak.disabled = true; resolve(); }; });
+  } catch (err) {
+    ttsLog.textContent = "Speech failed: " + err.message;
+    ttsSpeak.disabled = false; ttsStopSpeak.disabled = true;
+  }
+}
+ttsSpeak.addEventListener("click", () => {
+  const text = ttsSample.value.trim();
+  if (!text) { ttsLog.textContent = "Type something first, then SPEAK SAMPLE."; return; }
+  speakText(text);
+});
+ttsStopSpeak.addEventListener("click", () => {
+  try { window.speechSynthesis.cancel(); } catch {}
+  try { ttsAudio.pause(); ttsAudio.currentTime = 0; } catch {}
+  ttsSpeak.disabled = kokoro ? false : true;
+  ttsStopSpeak.disabled = true;
+  ttsLog.textContent = "Stopped.";
+});
+ttsPreview.addEventListener("click", () => {
+  const text = ttsSample.value.trim();
+  if (!text) { ttsLog.textContent = "Type something first, then PREVIEW."; return; }
+  if (!("speechSynthesis" in window)) { ttsLog.textContent = "No built-in preview voice in this browser."; return; }
+  try { window.speechSynthesis.cancel(); } catch {}
+  try { ttsAudio.pause(); } catch {}
+  const u = new SpeechSynthesisUtterance(text);
+  const rate = parseFloat(ttsSpeed.value) || 1;
+  u.rate = Math.min(Math.max(rate, 0.5), 2);
+  u.pitch = /^a[mf]_/.test(ttsVoice.value) ? 1 : (/^bf_/.test(ttsVoice.value) ? 1.15 : 0.85);
+  u.onend = () => { ttsLog.textContent = "Preview done. Download Kokoro for the full offline voice."; };
+  window.speechSynthesis.speak(u);
+  ttsLog.textContent = "Previewing with built-in voice…";
+});
+thread.addEventListener("click", (e) => {
+  const btn = e.target.closest ? e.target.closest(".speak-reply") : null;
+  if (!btn) return;
+  const bubble = btn.parentElement.querySelector(".bubble");
+  speakText(bubble ? bubble.textContent : "");
+});
+</script>
+</body>
+</html>
